@@ -411,12 +411,12 @@ textarea {
 }
 
 .sidebar-content {
-  position: fixed;
+  position: absolute;
   left: 78px;
-  top: max(72px, calc(16px + env(safe-area-inset-top)));
+  top: 50%;
   width: min(76vw, 330px);
-  max-height: calc(100vh - 154px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
-  max-height: calc(100dvh - 154px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  max-height: min(62vh, calc(100vh - 210px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+  max-height: min(62dvh, calc(100dvh - 210px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 12px;
@@ -426,14 +426,14 @@ textarea {
   box-shadow: var(--shadow);
   opacity: 0;
   pointer-events: none;
-  transform: translateX(-12px) scale(0.98);
+  transform: translate(-12px, -50%) scale(0.98);
   transition: opacity 180ms ease, transform 180ms ease;
 }
 
 .side-drawer.panel-open .sidebar-content {
   opacity: 1;
   pointer-events: auto;
-  transform: translateX(0) scale(1);
+  transform: translate(0, -50%) scale(1);
 }
 
 .sidebar-content h2 {
@@ -727,6 +727,28 @@ textarea {
   }
 }
 
+.sidebar-content {
+  position: absolute !important;
+  left: 78px !important;
+  top: 50% !important;
+  transform: translate(-12px, -50%) scale(0.98) !important;
+  max-height: min(62vh, calc(100vh - 210px - env(safe-area-inset-top) - env(safe-area-inset-bottom))) !important;
+  max-height: min(62dvh, calc(100dvh - 210px - env(safe-area-inset-top) - env(safe-area-inset-bottom))) !important;
+}
+
+.side-drawer.panel-open .sidebar-content {
+  transform: translate(0, -50%) scale(1) !important;
+}
+
+@media (max-width: 540px) {
+  .sidebar-content {
+    left: 68px !important;
+    top: 50% !important;
+    max-height: min(58vh, calc(100vh - 230px - env(safe-area-inset-top) - env(safe-area-inset-bottom))) !important;
+    max-height: min(58dvh, calc(100dvh - 230px - env(safe-area-inset-top) - env(safe-area-inset-bottom))) !important;
+  }
+}
+
 @media (max-width: 540px) {
   body {
     font-size: 15px;
@@ -863,10 +885,10 @@ textarea {
 
   .sidebar-content {
     left: 68px;
-    top: max(58px, calc(10px + env(safe-area-inset-top)));
+    top: 50%;
     width: min(78vw, 300px);
-    max-height: calc(100vh - 132px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
-    max-height: calc(100dvh - 132px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    max-height: min(58vh, calc(100vh - 230px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+    max-height: min(58dvh, calc(100dvh - 230px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
     padding: 10px;
     border-radius: 18px;
   }
@@ -962,6 +984,28 @@ textarea {
   .memory-footer {
     padding: 10px;
     padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+}
+
+.sidebar-content {
+  position: absolute;
+  left: 78px;
+  top: 50%;
+  transform: translate(-12px, -50%) scale(0.98);
+  max-height: min(62vh, calc(100vh - 210px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+  max-height: min(62dvh, calc(100dvh - 210px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+}
+
+.side-drawer.panel-open .sidebar-content {
+  transform: translate(0, -50%) scale(1);
+}
+
+@media (max-width: 540px) {
+  .sidebar-content {
+    left: 68px;
+    top: 50%;
+    max-height: min(58vh, calc(100vh - 230px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
+    max-height: min(58dvh, calc(100dvh - 230px - env(safe-area-inset-top) - env(safe-area-inset-bottom)));
   }
 }
 
@@ -1323,6 +1367,28 @@ select {
   .sidebar-content::before {
     left: 12px;
     right: 12px;
+  }
+}
+
+.sidebar-content {
+  position: absolute !important;
+  left: 78px !important;
+  top: 50% !important;
+  transform: translate(-12px, -50%) scale(0.98) !important;
+  max-height: min(62vh, calc(100vh - 210px - env(safe-area-inset-top) - env(safe-area-inset-bottom))) !important;
+  max-height: min(62dvh, calc(100dvh - 210px - env(safe-area-inset-top) - env(safe-area-inset-bottom))) !important;
+}
+
+.side-drawer.panel-open .sidebar-content {
+  transform: translate(0, -50%) scale(1) !important;
+}
+
+@media (max-width: 540px) {
+  .sidebar-content {
+    left: 68px !important;
+    top: 50% !important;
+    max-height: min(58vh, calc(100vh - 230px - env(safe-area-inset-top) - env(safe-area-inset-bottom))) !important;
+    max-height: min(58dvh, calc(100dvh - 230px - env(safe-area-inset-top) - env(safe-area-inset-bottom))) !important;
   }
 }
 </style>
@@ -1728,10 +1794,10 @@ function renderSidebar() {
         card.innerHTML = `
           <div>姓名：${escapeHtml(person.name)}</div>
           <div>年龄：${escapeHtml(person.age)}</div>
-          <div>外貌：${escapeHtml(person.appearance)}</div>
-          <div>体位：${escapeHtml(person.posture)}</div>
+          <div>外形：${escapeHtml(person.appearance || "外形细节仍在当前光线里逐步清晰。")}</div>
+          <div>体位（姿势）：${escapeHtml(person.posture || "停在便于观察局势的位置。")}</div>
           <div>内心想法：${escapeHtml(ensureLongThought(person.thought, person.name))}</div>
-          <div>对你的印象：${escapeHtml(person.impression)}</div>
+          <div>对“你”印象：${escapeHtml(person.impression || "仍在观察你的意图与边界。")}</div>
         `;
         group.appendChild(card);
       });
@@ -1921,6 +1987,8 @@ async function submitPlayerText(text) {
   if (!trimmed) return;
   const playerEvent = { id: uid("player"), type: "player", text: trimmed, createdAt: Date.now() };
   state.events.push(playerEvent);
+  rebuildTimeline();
+  renderAll();
   const aiEvent = await createAiEvent({ source: "player", text: trimmed, afterEventId: playerEvent.id });
   state.events.push(aiEvent);
   rebuildTimeline();
@@ -1930,6 +1998,7 @@ async function submitPlayerText(text) {
 async function submitDirective(text) {
   const trimmed = text.trim();
   if (!trimmed) return;
+  renderAll();
   const aiEvent = await createAiEvent({ source: "directive", text: trimmed });
   state.events.push(aiEvent);
   rebuildTimeline();
@@ -1968,6 +2037,7 @@ async function generateWithApi({ source, text, previous, variant }) {
     "主控姓名只作为底层角色识别；正文中称呼主控时必须使用第二人称，不能直接写出主控姓名来替代玩家。",
     "返回严格 JSON，不要 Markdown。结构：env{time,place,weather}, blocks 数组，元素为 {type:'paragraph',text} 或 {type:'dialogue',speaker,text}。",
     "剧情正文必须是自然段，不能在一句话中间硬换行。每个 dialogue 只能包含一个角色的一句或一段台词。",
+    "人物描写必须读取设定后自然提炼，不能整段照抄。外形要结合当前场景和情绪变化重新描写，NPC 行为要受记忆影响但不能 OOC。",
     `世界设定：${state.settings.world || "未填写"}`,
     `主控设定：${formatPlayerProfileForPrompt()}`,
     `主要 NPC：${JSON.stringify(state.settings.npcs)}`,
@@ -1978,7 +2048,7 @@ async function generateWithApi({ source, text, previous, variant }) {
     `重说差异种子：${variant}`
   ].join("\n");
 
-  const response = await fetch(state.settings.apiUrl, {
+  const response = await fetchWithTimeout(state.settings.apiUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -1992,13 +2062,23 @@ async function generateWithApi({ source, text, previous, variant }) {
       ],
       temperature: variant ? 0.95 : 0.75
     })
-  });
+  }, 12000);
 
   if (!response.ok) throw new Error(`API HTTP ${response.status}`);
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content || data.output_text || "";
   const parsed = JSON.parse(content);
   return normalizeStory(parsed, previous, text, variant);
+}
+
+async function fetchWithTimeout(url, options = {}, timeout = 12000) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeout);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 function getModelsUrl(apiUrl) {
@@ -2027,9 +2107,9 @@ async function fetchAvailableModels() {
   }
   showApiStatus("正在拉取模型...", "neutral");
   try {
-    const response = await fetch(getModelsUrl(state.settings.apiUrl), {
+    const response = await fetchWithTimeout(getModelsUrl(state.settings.apiUrl), {
       headers: { Authorization: `Bearer ${state.settings.apiKey}` }
-    });
+    }, 10000);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     const models = (Array.isArray(data.data) ? data.data : [])
@@ -2055,7 +2135,7 @@ async function testApiConnection() {
   }
   showApiStatus("正在检验连接...", "neutral");
   try {
-    const response = await fetch(state.settings.apiUrl, {
+    const response = await fetchWithTimeout(state.settings.apiUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -2070,7 +2150,7 @@ async function testApiConnection() {
         max_tokens: 8,
         temperature: 0
       })
-    });
+    }, 10000);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     await response.json();
     saveState();
@@ -2231,6 +2311,12 @@ function applyPlayerEvent(snapshot, event) {
     sourceEventId: event.id,
     text: summarizeMemory(event.text)
   });
+  next.statuses = (next.statuses || []).map((person, index) => ({
+    ...person,
+    posture: describeResponsivePosture(person.name, event.text, next.env, index),
+    thought: buildThought(person.name, event.text, next.memories, next.seed + index),
+    impression: buildImpression(event.text, next.seed + index)
+  }));
   compactMemories(next);
   return next;
 }
@@ -2245,7 +2331,7 @@ function applyAiEvent(snapshot, event) {
     id: npc.id,
     name: npc.name,
     age: npc.age || existing?.age || "未知",
-    appearance: existing?.appearance || npc.detail || "外貌细节正在剧情中逐步清晰。",
+    appearance: buildDynamicAppearance(npc, event.story.env, event.prompt || "", event.variant || 0),
     posture: describePosture(event.story.env, event.variant),
     thought: buildThought(npc.name, event.prompt || "", next.memories, event.variant),
     impression: buildImpression(event.prompt || "", event.variant)
@@ -2314,13 +2400,64 @@ function describePosture(env, variant) {
   return postures[(env.place.length + variant) % postures.length];
 }
 
+function describeResponsivePosture(name, prompt, env, seed) {
+  const postures = [
+    `${name}微微调整站位，视线越过${env.place || "现场"}里最显眼的线索，没有贸然逼近你。`,
+    `${name}停在离你不远不近的位置，肩线略收，像是在衡量刚才变化的分量。`,
+    `${name}侧身靠近光线较稳的一侧，姿势克制，注意力仍落在现场异常处。`,
+    `${name}放慢动作，身体重心略向后收，给当前局势留出继续发展的空隙。`
+  ];
+  return postures[(prompt.length + seed) % postures.length];
+}
+
+function buildDynamicAppearance(npc, env, prompt, variant) {
+  const traits = extractAppearanceTraits(npc.detail || "");
+  const hair = traits.hair ? `${traits.hair}${pick(["在光下显得柔软", "被空气带得微微凌乱", "贴着颊侧落下一点阴影"], prompt.length + variant)}` : "";
+  const skin = traits.skin ? `${traits.skin}${pick(["被灯色衬出浅浅暖意", "在紧张气氛里显得更清冷", "因现场变化透出细微血色"], prompt.length + variant + 1)}` : "";
+  const face = traits.face ? `${traits.face}${pick(["让神情显得更分明", "在侧光里轮廓清楚", "压住了多余情绪"], prompt.length + variant + 2)}` : "";
+  const clothes = traits.clothes ? `${traits.clothes}${pick(["边缘沾着一点现场的光影", "随着动作出现细小褶皱", "让此人看起来仍保持克制"], prompt.length + variant + 3)}` : "";
+  const picked = [hair, skin, face, clothes].filter(Boolean).slice(0, 3);
+  if (picked.length) return picked.join("，") + "。";
+  const fallback = npc.detail
+    ? `外形从设定中自然提炼，只留下与${env.place || "当前场景"}相符的轮廓：神情、衣着和动作都随现场气氛略有变化。`
+    : `轮廓在${env.place || "现场"}的光线里逐步清晰，神情克制，细节仍留给后续剧情展开。`;
+  return fallback;
+}
+
+function extractAppearanceTraits(detail) {
+  const text = String(detail || "");
+  const hairMatch = text.match(/[^，。；、\s]{0,8}(?:黑|白|银|金|棕|褐|灰|红|粉|蓝|紫|栗|茶)[^，。；、\s]{0,8}(?:发|头发|卷发|卷毛|长发|短发|马尾|刘海)/);
+  const skinMatch = text.match(/(?:白皮肤|白皙|冷白皮|小麦肤|肤色[^，。；、\s]{0,8}|皮肤[^，。；、\s]{0,8})/);
+  const faceMatch = text.match(/(?:高鼻梁|鼻梁[^，。；、\s]{0,8}|眼睛[^，。；、\s]{0,8}|眉眼[^，。；、\s]{0,8}|薄唇|唇色[^，。；、\s]{0,8}|脸[^，。；、\s]{0,8}|轮廓[^，。；、\s]{0,8})/);
+  const clothesMatch = text.match(/(?:穿着|身穿|衣着|制服|长裙|衬衫|外套|风衣|披肩|靴子|手套)[^，。；、\s]{0,14}/);
+  return {
+    hair: hairMatch?.[0] || "",
+    skin: skinMatch?.[0] || "",
+    face: faceMatch?.[0] || "",
+    clothes: clothesMatch?.[0] || ""
+  };
+}
+
 function buildThought(name, prompt, memories, variant) {
   const recent = memories.instant.at(-1)?.text || memories.long.at(-1)?.text || "还没有足够多的共同经历";
-  return `${name}正在把眼前的线索和“${prompt.slice(0, 18) || "新的变化"}”联系起来。${recent}让此人不敢轻易下结论，只能继续观察主控的下一步倾向，同时暗自衡量信任、风险和是否需要透露更多隐情。`;
+  const focus = prompt.replace(/\s+/g, "").slice(0, 18) || "新的变化";
+  const tones = [
+    "此人不敢轻易下结论，只能继续观察你接下来会把注意力放在哪里。",
+    "此人开始重新评估你与现场异常之间的关系，同时压住过早表态的冲动。",
+    "此人意识到局势正在偏离原本预想，于是把更多判断暂时藏在沉默里。",
+    "此人对你的目的多了一层推测，却仍然克制着，不把这种判断直接说出口。"
+  ];
+  return `${name}正在把眼前的线索和“${focus}”联系起来。${recent} ${tones[(focus.length + variant) % tones.length]}这种想法会影响下一次开口、站位和是否愿意透露更多信息。`;
 }
 
 function buildImpression(prompt, variant) {
-  const impressions = ["谨慎好奇", "略有戒备但愿意交流", "认为你值得继续观察", "感到局势因你而变得复杂", "对你的目的产生新的兴趣"];
+  const impressions = [
+    "对你保持谨慎好奇，认为你值得继续观察。",
+    "对你略有戒备，但并未关闭交流的可能。",
+    "觉得你让局势变得复杂，因此更关注你的下一步选择。",
+    "对你的目的产生新的兴趣，同时仍在保留判断。",
+    "认为你没有轻易打破边界，因此愿意暂时维持合作距离。"
+  ];
   return impressions[(prompt.length + variant) % impressions.length];
 }
 
