@@ -1817,8 +1817,8 @@ function renderAiMessage(event) {
       <div class="story-body">${storyHtml}</div>
       <div class="button-row">
         <button class="message-action" data-action="delete-ai" data-id="${event.id}" type="button">删除</button>
-        ${isLoading ? "" : `<button class="message-action" data-action="reroll-ai" data-id="${event.id}" type="button">重说</button>`}
-        ${isLoading || isError ? "" : `<button class="message-action" data-action="edit-ai" data-id="${event.id}" type="button">修改</button>`}
+        <button class="message-action" data-action="reroll-ai" data-id="${event.id}" type="button">重说</button>
+        <button class="message-action" data-action="edit-ai" data-id="${event.id}" type="button">修改</button>
       </div>
     </div>
   `;
@@ -2009,6 +2009,19 @@ function syncCharacterFromInputs() {
     age: els.playerAge.value.trim(),
     detail: els.playerDetail.value.trim()
   };
+  syncNpcSettingsFromInputs();
+}
+
+function syncNpcSettingsFromInputs() {
+  const cards = Array.from(els.npcList.querySelectorAll(".npc-card"));
+  if (!cards.length) return;
+  state.settings.npcs = cards.map((card) => ({
+    id: card.dataset.id || uid("npc"),
+    name: card.querySelector("[data-npc-field='name']")?.value.trim() || "",
+    gender: card.querySelector("[data-npc-field='gender']")?.value.trim() || "",
+    age: card.querySelector("[data-npc-field='age']")?.value.trim() || "",
+    detail: card.querySelector("[data-npc-field='detail']")?.value.trim() || ""
+  }));
 }
 
 function syncApiFromInputs() {
@@ -2124,6 +2137,8 @@ function keepTypingVisible(startedAt, minimum = 850) {
 }
 
 async function generateStory({ source, text, previous, variant, eventId }) {
+  syncAllSettingsFromInputs();
+  saveState();
   if (!state.settings.apiUrl || !state.settings.apiKey || !state.settings.apiModel) {
     throw new Error("请先在主页设置里填写 API URL、密钥和模型，并保存后再生成剧情。");
   }
@@ -2139,6 +2154,9 @@ async function generateWithApi({ source, text, previous, variant, eventId }) {
     "剧情正文必须是自然段，不能在一句话中间硬换行。每个 dialogue 只能包含一个角色的一句或一段台词。",
     "dialogue.text 只能写角色真正说出口的话，禁止放入动作描写、心理描写、神态描写或旁白。",
     "人物描写必须读取设定后自然提炼，不能整段照抄。外形要结合当前场景和情绪变化重新描写，NPC 行为要受记忆影响但不能 OOC。",
+    "NPC 必须像真实人物一样拥有稳定性格、欲望和顾虑；剧情发展要受到在场人物状态影响，例如开朗爱做饭的邻居会自然想到聊天、送食物或邀请吃饭，而不是只围绕抽象线索判断。",
+    "禁止在正文或人物状态里暴露生成逻辑、设定提炼、系统规则、模型限制等 AI 感文字。",
+    "如果出现人物说话，必须单独使用 dialogue 块；paragraph 里不得混入引号台词，也不得把台词和旁白挤在同一段。",
     `世界设定：${state.settings.world || "未填写"}`,
     `主控设定：${formatPlayerProfileForPrompt()}`,
     `主要 NPC：${JSON.stringify(state.settings.npcs)}`,
@@ -2439,9 +2457,8 @@ function normalizeStory(story, previous, text, variant) {
       }
       return;
     }
-    normalizedBlocks.push({
-      type: "paragraph",
-      text: sanitizeNoPlayerControl(block.text || "")
+    splitParagraphAndDialogue(block.text || "", text, variant).forEach((item) => {
+      normalizedBlocks.push(item);
     });
   });
   const filteredBlocks = normalizedBlocks.filter((block) => block.text.trim());
@@ -2451,6 +2468,32 @@ function normalizeStory(story, previous, text, variant) {
   }
 
   return { env: safeEnv, blocks: filteredBlocks };
+}
+
+function splitParagraphAndDialogue(text, prompt, variant) {
+  const raw = String(text || "").replace(/\s*\n+\s*/g, " ").trim();
+  if (!raw) return [];
+  const pattern = /([^。！？!?：“”"「」『』]{1,12})[：:]\s*[“"「『]([^”"」』]+)[”"」』]/g;
+  const blocks = [];
+  let last = 0;
+  let match;
+  while ((match = pattern.exec(raw))) {
+    const before = raw.slice(last, match.index).trim();
+    if (before) {
+      blocks.push({ type: "paragraph", text: sanitizeNoPlayerControl(before) });
+    }
+    blocks.push({
+      type: "dialogue",
+      speaker: match[1].replace(/.*?(楼下|窗外|门外|身后|旁边)?([^，。！？!?：:]{1,8})$/, "$2").trim() || chooseNpc(prompt, variant).name,
+      text: sanitizeNoPlayerControl(match[2].trim())
+    });
+    last = pattern.lastIndex;
+  }
+  const rest = raw.slice(last).trim();
+  if (rest) {
+    blocks.push({ type: "paragraph", text: sanitizeNoPlayerControl(rest) });
+  }
+  return blocks.length ? blocks : [{ type: "paragraph", text: sanitizeNoPlayerControl(raw) }];
 }
 
 function cleanDialogueText(text) {
@@ -2469,14 +2512,14 @@ function cleanDialogueText(text) {
   const speechVerbs = /(说|说道|开口|低声|轻声|回答|问|提醒|喊|喃喃|冷声)/;
   const dialogueParts = parts.filter((part) => !actionPattern.test(part) || speechVerbs.test(part));
   const asideParts = parts.filter((part) => actionPattern.test(part) && !speechVerbs.test(part));
-  const speechSource = dialogueParts[0] || raw;
+  const speechSource = dialogueParts.length ? dialogueParts.join("") : raw;
   const line = speechSource
     .replace(/^(.*?(?:说|说道|开口|低声|轻声|回答|问|提醒|喊|喃喃|冷声)[：:])/, "")
     .replace(/[“”"「」『』]/g, "")
     .trim();
   return {
     line,
-    aside: asideParts.filter((part) => part !== speechSource).join("")
+    aside: asideParts.filter((part) => !dialogueParts.includes(part)).join("")
   };
 }
 
@@ -2503,9 +2546,10 @@ function sanitizeNoPlayerControl(text) {
 function chooseNpc(text, variant) {
   const savedNpcs = state.settings.npcs.filter((npc) => (npc.name || npc.detail || "").trim());
   const ambientNpcs = [
-    { id: "ambient-clerk", name: "临时店员", gender: "未知", age: "未知", detail: "衣着整洁，神情克制，只在当前场景短暂出现。" },
-    { id: "ambient-witness", name: "旁观者", gender: "未知", age: "未知", detail: "站在光线边缘，像是刚刚注意到异常动静。" },
-    { id: "ambient-stranger", name: "陌生人", gender: "未知", age: "未知", detail: "轮廓在光线里并不清晰，但注意力始终停在当前事件上。" }
+    { id: "ambient-neighbor", name: "热心邻居", gender: "未知", age: "三十岁上下", detail: "开朗话唠，爱做饭，容易关心刚认识的人。圆脸，面色红润，穿柔软的家居开衫。" },
+    { id: "ambient-witness", name: "谨慎旁观者", gender: "未知", age: "二十多岁", detail: "敏锐谨慎，说话前会先观察局势。短发，眼神清亮，深色外套。" },
+    { id: "ambient-guard", name: "值夜管理员", gender: "未知", age: "四十岁左右", detail: "谨慎克制，负责秩序，外冷内热，习惯把担心藏在严厉后面。肩背宽，制服整洁，眉间有浅纹。" },
+    { id: "ambient-stranger", name: "安静陌生人", gender: "未知", age: "未知", detail: "寡言克制，不轻易靠近别人。身形清瘦，衣领压得很低，动作很轻。" }
   ];
   const npcs = savedNpcs.length ? [...savedNpcs, ...ambientNpcs] : ambientNpcs;
   const npc = npcs[(text.length + variant) % npcs.length];
@@ -2515,6 +2559,38 @@ function chooseNpc(text, variant) {
     age: npc.age || "未知",
     detail: npc.detail || "轮廓在光线里并不清晰，但注意力始终停在当前事件上。"
   };
+}
+
+function getPresentNpcs(event) {
+  const speakers = [...new Set((event.story?.blocks || [])
+    .filter((block) => block.type === "dialogue" && block.speaker)
+    .map((block) => String(block.speaker).trim())
+    .filter(Boolean))];
+  if (!speakers.length) return [chooseNpc(event.prompt || "", event.variant || 0)];
+  return speakers.map((speaker, index) => {
+    const saved = state.settings.npcs.find((npc) => npc.name && speaker.includes(npc.name));
+    if (saved) return saved;
+    const picked = chooseNpc(`${event.prompt || ""}${speaker}`, (event.variant || 0) + index);
+    if (/邻居/.test(speaker)) {
+      return { ...picked, id: `speaker-${speaker}`, name: speaker, age: "三十岁上下", detail: "开朗话唠，热心，爱做饭，容易把关心藏在闲聊和食物里。面色红润，穿柔软的家居开衫。" };
+    }
+    if (/路人|旁观/.test(speaker)) {
+      return { ...picked, id: `speaker-${speaker}`, name: speaker, age: "未知", detail: "普通路人，心直口快，容易被糟糕环境惹得烦躁。衣着日常，神情不耐。" };
+    }
+    if (/管理员|保安|守夜/.test(speaker)) {
+      return { ...picked, id: `speaker-${speaker}`, name: speaker, age: "四十岁左右", detail: "谨慎克制，负责秩序，外冷内热。肩背宽，制服整洁，眉间有浅纹。" };
+    }
+    return { ...picked, id: `speaker-${speaker}`, name: speaker };
+  });
+}
+
+function buildRelationDescription(npc, impression) {
+  const profile = parseCharacterProfile(npc, 0);
+  if (profile.tone === "talkative") return `刚认识但愿意亲近，对你抱着热络好奇；${impression}`;
+  if (profile.tone === "gentle") return `保持温和距离，倾向先照顾你的处境；${impression}`;
+  if (profile.tone === "proud") return `互相试探中，不轻易示弱也不轻易信任；${impression}`;
+  if (profile.tone === "nervous") return `小心接触中，对你既好奇又不敢完全放松；${impression}`;
+  return `保持观察关系，态度会随你的下一步行动变化；${impression}`;
 }
 
 function pick(list, seed) {
@@ -2547,9 +2623,9 @@ function applyPlayerEvent(snapshot, event) {
   });
   next.statuses = (next.statuses || []).map((person, index) => ({
     ...person,
-    posture: describeResponsivePosture(person.name, event.text, next.env, index),
-    thought: buildThought(person, event.text, next.memories, next.seed + index),
-    impression: buildImpression(person, event.text, next.seed + index)
+    posture: describeResponsivePosture(person, event.text, next.env, index),
+    thought: buildThought(person, buildSceneCue(event.text, "", next.env), next.memories, next.seed + index),
+    impression: buildImpression(person, buildSceneCue(event.text, "", next.env), next.seed + index)
   }));
   compactMemories(next);
   return next;
@@ -2562,34 +2638,43 @@ function applyAiEvent(snapshot, event) {
   }
   next.seed += 1;
   next.env = event.story.env;
-  const npc = chooseNpc(event.prompt || "", event.variant || 0);
-  const existing = next.statuses.find((person) => person.id === npc.id || person.name === npc.name);
-  const status = {
-    id: npc.id,
-    name: npc.name,
-    detail: npc.detail || existing?.detail || "",
-    age: npc.age || existing?.age || "未知",
-    appearance: buildDynamicAppearance(npc, event.story.env, event.prompt || "", event.variant || 0),
-    posture: describePosture(event.story.env, event.variant),
-    thought: buildThought(npc, event.prompt || "", next.memories, event.variant),
-    impression: buildImpression(npc, event.prompt || "", event.variant)
-  };
-  if (existing) Object.assign(existing, status);
-  else next.statuses.push(status);
+  const storyText = getStoryPlainText(event.story);
+  const cue = buildSceneCue(event.prompt || "", storyText, next.env);
+  const npcs = getPresentNpcs(event).map((npc, index) => {
+    const existing = next.statuses.find((person) => person.id === npc.id || person.name === npc.name);
+    return { ...npc, detail: npc.detail || existing?.detail || "", existing, offset: index };
+  });
 
-  const relation = next.relations.find((item) => item.id === npc.id || item.name === npc.name);
-  const delta = event.source === "directive" ? 1 : Math.max(1, Math.min(6, (event.prompt || "").length % 7));
-  if (relation) {
-    relation.affection = clamp(Number(relation.affection || 0) + delta - (event.variant ? 1 : 0), -100, 100);
-    relation.description = `经历当前事件后，${npc.name}对主控保持关注，态度受到最近记忆影响而继续变化。`;
-  } else {
-    next.relations.push({
+  npcs.forEach((npc) => {
+    const profile = parseCharacterProfile(npc, (event.variant || 0) + npc.offset);
+    const status = {
       id: npc.id,
       name: npc.name,
-      description: `已出场，正在根据主控的行动建立初步判断。`,
-      affection: delta
-    });
-  }
+      detail: npc.detail || npc.existing?.detail || "",
+      age: npc.age || npc.existing?.age || "未知",
+      profile,
+      appearance: buildDynamicAppearance({ ...npc, profile }, event.story.env, cue, (event.variant || 0) + npc.offset),
+      posture: describePosture(event.story.env, (event.variant || 0) + npc.offset, profile, cue),
+      thought: buildThought({ ...npc, profile }, cue, next.memories, (event.variant || 0) + npc.offset),
+      impression: buildImpression({ ...npc, profile }, cue, (event.variant || 0) + npc.offset)
+    };
+    if (npc.existing) Object.assign(npc.existing, status);
+    else next.statuses.push(status);
+
+    const relation = next.relations.find((item) => item.id === npc.id || item.name === npc.name);
+    const delta = event.source === "directive" ? 1 : Math.max(1, Math.min(6, (event.prompt || "").length % 7));
+    if (relation) {
+      relation.affection = clamp(Number(relation.affection || 0) + delta - (event.variant ? 1 : 0), -100, 100);
+      relation.description = buildRelationDescription(npc, status.impression);
+    } else {
+      next.relations.push({
+        id: npc.id,
+        name: npc.name,
+        description: buildRelationDescription(npc, status.impression),
+        affection: delta
+      });
+    }
+  });
   return next;
 }
 
@@ -2628,46 +2713,76 @@ function compactMemories(snapshot) {
   }
 }
 
-function describePosture(env, variant) {
-  const postures = [
-    `站在${env.place}的边缘，身体微微侧向声源`,
-    `停在可观察全局的位置，双手保持克制`,
-    `靠近光线较亮的一侧，姿态紧张但没有逼近`,
-    `半坐在附近的矮台边，视线仍追着关键线索`
-  ];
-  return postures[(env.place.length + variant) % postures.length];
+function describePosture(env, variant, profile = {}, cue = "") {
+  const tone = profile.tone || "careful";
+  const place = env.place || "现场";
+  const focus = sceneFocus(cue);
+  const sets = {
+    talkative: [
+      `站在${place}靠近门口的位置，身体微微前倾，像是随时想搭话。`,
+      `一只手扶着旁边的桌沿，脚尖朝着你，肩膀放松得很自然。`,
+      `半倚在走道边，手里还攥着没放下的小物件，注意力一直往你这边飘。`
+    ],
+    gentle: [
+      `停在离你两三步远的位置，身体侧开半分，给你留出退路。`,
+      `双手轻轻交握在身前，站姿柔和，视线先落在你附近的环境上。`,
+      `靠近较亮的一侧站着，姿态安静，像是在等你先适应眼前局面。`
+    ],
+    proud: [
+      `站得笔直，肩线绷得很稳，视线从容地扫过${place}。`,
+      `侧身停在不远处，下颌微抬，姿势里带着一点不肯示弱的锋利。`,
+      `一手垂在身侧，另一只手压着衣角，像是不愿让情绪先露出来。`
+    ],
+    nervous: [
+      `贴着${place}边缘站着，手指不自觉收紧，又忍不住看向你。`,
+      `半步退在阴影旁，肩膀略缩，视线在你和周围动静之间来回移动。`,
+      `脚步停得很轻，像怕惊动什么，呼吸也跟着放慢了。`
+    ],
+    careful: [
+      `停在能看清你和${place}动静的位置，身体没有贸然靠近。`,
+      `微微侧身站着，视线压低，先把周围细节过了一遍。`,
+      `站在光线边缘，双手收得很稳，留意着${focus}。`
+    ],
+    irritable: [
+      `停在${place}边上，肩膀绷着，像是被糟糕的环境磨得没了耐心。`,
+      `一只手插在衣兜里，脚尖烦躁地点了点地，视线扫过走廊。`,
+      `站得不算近，脸色发沉，注意力被周围的动静牵着走。`
+    ]
+  };
+  const list = sets[tone] || sets.careful;
+  return list[Math.abs((cue || place).length + variant) % list.length];
 }
 
-function describeResponsivePosture(name, prompt, env, seed) {
-  const postures = [
-    `${name}微微调整站位，视线越过${env.place || "现场"}里最显眼的线索，没有贸然逼近你。`,
-    `${name}停在离你不远不近的位置，肩线略收，像是在衡量刚才变化的分量。`,
-    `${name}侧身靠近光线较稳的一侧，姿势克制，注意力仍落在现场异常处。`,
-    `${name}放慢动作，身体重心略向后收，给当前局势留出继续发展的空隙。`
-  ];
-  return postures[(prompt.length + seed) % postures.length];
+function describeResponsivePosture(person, prompt, env, seed) {
+  const profile = person.profile || parseCharacterProfile(person, seed);
+  return describePosture(env, seed, profile, prompt);
 }
 
-function buildDynamicAppearance(npc, env, prompt, variant) {
-  const traits = extractAppearanceTraits(npc.detail || "");
-  const hair = traits.hair ? `${traits.hair}${pick(["在光下显得柔软", "被空气带得微微凌乱", "贴着颊侧落下一点阴影"], prompt.length + variant)}` : "";
-  const skin = traits.skin ? `${traits.skin}${pick(["被灯色衬出浅浅暖意", "在紧张气氛里显得更清冷", "因现场变化透出细微血色"], prompt.length + variant + 1)}` : "";
-  const face = traits.face ? `${traits.face}${pick(["让神情显得更分明", "在侧光里轮廓清楚", "压住了多余情绪"], prompt.length + variant + 2)}` : "";
-  const clothes = traits.clothes ? `${traits.clothes}${pick(["边缘沾着一点现场的光影", "随着动作出现细小褶皱", "让此人看起来仍保持克制"], prompt.length + variant + 3)}` : "";
-  const picked = [hair, skin, face, clothes].filter(Boolean).slice(0, 3);
-  if (picked.length) return picked.join("，") + "。";
-  const fallback = npc.detail
-    ? `外形从设定中自然提炼，只留下与${env.place || "当前场景"}相符的轮廓：神情、衣着和动作都随现场气氛略有变化。`
-    : `轮廓在${env.place || "现场"}的光线里逐步清晰，神情克制，细节仍留给后续剧情展开。`;
-  return fallback;
+function buildDynamicAppearance(npc, env, cue, variant) {
+  const profile = npc.profile || parseCharacterProfile(npc, variant);
+  const emotion = inferSceneEmotion(cue);
+  const expression = {
+    warm: ["眼里浮着笑意", "唇角压不住一点热络", "面色红润，神情很亮"],
+    tense: ["眉心轻轻蹙起", "唇线收紧，脸色比刚才淡了些", "眼神绷着一层警惕"],
+    curious: ["目光亮了一下", "眼尾带着明显的好奇", "神情像被什么细节勾住"],
+    guarded: ["视线克制地停了一瞬", "表情收得很稳", "神色没有完全放松"]
+  }[emotion];
+  const base = [
+    profile.hair,
+    profile.skin,
+    profile.face,
+    profile.clothes,
+    pick(expression, variant + cue.length)
+  ].filter(Boolean);
+  return base.slice(0, 4).join("，") + "。";
 }
 
 function extractAppearanceTraits(detail) {
   const text = String(detail || "");
   const hairMatch = text.match(/[^，。；、\s]{0,8}(?:黑|白|银|金|棕|褐|灰|红|粉|蓝|紫|栗|茶)[^，。；、\s]{0,8}(?:发|头发|卷发|卷毛|长发|短发|马尾|刘海)/);
   const skinMatch = text.match(/(?:白皮肤|白皙|冷白皮|小麦肤|肤色[^，。；、\s]{0,8}|皮肤[^，。；、\s]{0,8})/);
-  const faceMatch = text.match(/(?:高鼻梁|鼻梁[^，。；、\s]{0,8}|眼睛[^，。；、\s]{0,8}|眉眼[^，。；、\s]{0,8}|薄唇|唇色[^，。；、\s]{0,8}|脸[^，。；、\s]{0,8}|轮廓[^，。；、\s]{0,8})/);
-  const clothesMatch = text.match(/(?:穿着|身穿|衣着|制服|长裙|衬衫|外套|风衣|披肩|靴子|手套)[^，。；、\s]{0,14}/);
+  const faceMatch = text.match(/(?:高鼻梁|鼻梁[^，。；、\s]{0,8}|眼睛[^，。；、\s]{0,8}|眉眼[^，。；、\s]{0,8}|眉间[^，。；、\s]{0,8}|薄唇|唇色[^，。；、\s]{0,8}|圆脸|脸[^，。；、\s]{0,8}|轮廓[^，。；、\s]{0,8}|肩背[^，。；、\s]{0,8})/);
+  const clothesMatch = text.match(/(?:穿着|身穿|衣着|制服|家居开衫|开衫|长裙|衬衫|外套|风衣|披肩|靴子|手套)[^，。；、\s]{0,14}/);
   return {
     hair: hairMatch?.[0] || "",
     skin: skinMatch?.[0] || "",
@@ -2676,44 +2791,164 @@ function extractAppearanceTraits(detail) {
   };
 }
 
-function buildThought(person, prompt, memories, variant) {
+function buildThought(person, cue, memories, variant) {
   const name = typeof person === "string" ? person : person.name;
-  const detail = typeof person === "string" ? "" : person.detail || "";
-  const personality = extractPersonalityTone(detail);
-  const recent = memories.instant.at(-1)?.text || memories.long.at(-1)?.text || "还没有足够多的共同经历";
-  const focus = prompt.replace(/\s+/g, "").slice(0, 18) || "新的变化";
-  const tones = [
-    `${name}不愿轻易下结论，注意力会先落在你下一步关注的位置；${personality}让这个判断保持克制。`,
-    `${name}正在重新评估你与现场异常之间的关系，但还不会把话说满；${personality}使其更倾向保留余地。`,
-    `${name}察觉局势偏离原本预想，于是把更多判断压在心里；${personality}让此人避免贸然越界。`,
-    `${name}对你的目的多了一层推测，却还不适合直接表态；${personality}会影响下一次开口的分寸。`
-  ];
-  return `围绕“${focus}”，${name}会把眼前线索与最近经历联系起来。${recent} ${tones[(focus.length + variant) % tones.length]}这种内在判断会影响其下一次开口、站位和是否愿意透露更多信息。`;
+  const profile = typeof person === "string" ? parseCharacterProfile({ name }, variant) : (person.profile || parseCharacterProfile(person, variant));
+  const focus = sceneFocus(cue);
+  const memoryHint = (memories.instant.at(-1)?.text || memories.long.at(-1)?.text || "").replace(/^主控推动了剧情：/, "");
+  const hooks = {
+    talkative: [
+      `这个人看起来不是难相处的类型，要是现在递个话头过去，应该能聊起来。${focus}让气氛有了开口的机会；如果家里还有热汤或点心，拿来当借口也不会太突兀。可别一开口就说太多，把人吓得不想接话。`,
+      `新来的动静让人忍不住想凑过去问两句，尤其是${focus}之后，气氛好像没那么适合沉默。要不要先说点轻松的，或者把刚准备好的吃食分一点出去？万一你不喜欢被打扰，也得赶紧收住话头。`
+    ],
+    gentle: [
+      `刚才${focus}，看上去不能逼得太紧。先把声音放轻一点，留出距离，也许你会更愿意继续观察。若是气氛再僵下去，最好先递一句安抚的话，而不是急着追问。`,
+      `眼前的变化让人有些担心，但你未必需要立刻被照顾。先确认周围是否安全，再用不冒犯的方式提醒你，或许比直接靠近更合适。`
+    ],
+    proud: [
+      `${focus}这件事不能显得太在意，否则气势会先输一截。你看起来并不迟钝，贸然试探反而容易被看穿；最好挑一句稳一点的话，把主动权握在自己手里。`,
+      `局势被你牵动了一下，但还不到失态的程度。先看你下一步怎么做，再决定是顺势开口，还是把疑问压回去。`
+    ],
+    nervous: [
+      `刚才${focus}，总觉得哪里不太稳。你不像是故意找麻烦的人，但也不能完全放心；如果继续沉默，场面可能更尴尬，可一旦开口又怕说错话。`,
+      `心里有点发紧，尤其是${focus}之后，周围每一点声响都变得明显。也许该提醒你小心，又怕自己的慌张反而让事情变糟。`
+    ],
+    irritable: [
+      "周围这一摊事真够烦的，偏偏又撞上新邻居刚来。这个人看起来不像故意添乱，可走廊灯、门口动静和楼下破路全搅在一起，谁都会心烦。要不要提醒一句？算了，先看她是不是也被吓着了。",
+      "本来只想快点把眼前的麻烦绕过去，现在又多了个新面孔。她倒不像难相处的人，可要是继续在这里耗着，今晚肯定没完没了。先抱怨两句也许能探出她是不是愿意搭话。"
+    ],
+    careful: [
+      `眼下最重要的是别急着下结论。${focus}都得先记住，你现在的反应也值得继续观察；等关键线索和之前的事对上，再决定要不要透露更多信息。`,
+      `这一步让局势多了新的可能，不能只看表面。你没有立刻打破边界，这一点值得记下，但仍需要看后续选择是否一致。`
+    ]
+  };
+  const list = hooks[profile.tone] || hooks.careful;
+  const thought = list[Math.abs(variant + focus.length) % list.length];
+  const memory = memoryHint && !/我|你/.test(memoryHint) ? ` 先前的事也会让这份判断更谨慎。` : "";
+  return `${thought}${memory}`;
 }
 
-function buildImpression(person, prompt, variant) {
-  const detail = typeof person === "string" ? "" : person.detail || "";
-  const personality = extractPersonalityTone(detail);
-  const impressions = [
-    `对你保持谨慎好奇，觉得你值得继续观察，但会按${personality}控制距离。`,
-    `对你略有戒备，但还没有关闭交流可能，尤其会留意你是否尊重边界。`,
-    `觉得你让局势变得复杂，因此更关注你的下一步选择，而不是立刻信任或否定。`,
-    `对你的目的产生新的兴趣，同时仍在保留判断，不会突然做出夸张反应。`,
-    `认为你没有轻易打破边界，所以愿意暂时维持合作距离。`
-  ];
-  return impressions[(prompt.length + variant) % impressions.length];
+function buildImpression(person, cue, variant) {
+  const profile = typeof person === "string" ? parseCharacterProfile({ name: person }, variant) : (person.profile || parseCharacterProfile(person, variant));
+  const focus = sceneFocus(cue);
+  const impressions = {
+    talkative: [
+      `一个看起来还不错、应该能聊上几句的人；眼下正适合用食物或闲聊自然靠近。`,
+      `像是可以慢慢熟起来的新面孔，但还不确定你喜不喜欢被人热情靠近。`
+    ],
+    gentle: [
+      `让人想保持温和距离的人；看得出你正在处理眼前状况，所以不适合贸然逼近。`,
+      `并不讨厌你，反而有点担心你会被${focus}牵连，只是还不确定该不该插手。`
+    ],
+    proud: [
+      `不是可以随便糊弄的人；你让局势有了变化，因此值得认真看待，但暂时不能表现得太在意。`,
+      `有些难以判断的新变量，既不能轻视，也不想过早示弱。`
+    ],
+    nervous: [
+      `看起来不算危险，但你的出现让现场多了变数，需要再观察一会儿才敢放松。`,
+      `像是可以求助又不太敢靠近的人，印象还停在小心试探的阶段。`
+    ],
+    irritable: [
+      `一个刚搬来、暂时还看不出麻烦的新邻居；印象不坏，只是眼前这些破事让人没法好声好气。`,
+      `看起来还算讲理，但现在环境太糟，情绪很容易先被走廊里的动静带偏。`
+    ],
+    careful: [
+      `值得继续观察的人；你没有完全越界，但眼前这些动静让此人暂时保留判断。`,
+      `暂时不排斥你，不过信任还没有建立，需要看你接下来是否稳定。`
+    ]
+  };
+  const list = impressions[profile.tone] || impressions.careful;
+  return list[Math.abs(variant + focus.length) % list.length];
 }
 
-function extractPersonalityTone(detail) {
-  const text = String(detail || "");
-  const traits = [];
-  if (/克制|冷静|沉稳|理性|谨慎/.test(text)) traits.push("克制谨慎的性格");
-  if (/敏锐|聪明|洞察|观察/.test(text)) traits.push("敏锐的观察习惯");
-  if (/温柔|体贴|柔和/.test(text)) traits.push("温和的处事方式");
-  if (/傲慢|高傲|嘴硬|毒舌/.test(text)) traits.push("不愿轻易示弱的习惯");
-  if (/胆小|怯懦|不安|紧张/.test(text)) traits.push("容易不安的本能");
-  if (/忠诚|守序|正直/.test(text)) traits.push("重视原则的底线");
-  return traits[0] || "既有设定中的性格底色";
+function parseCharacterProfile(person, seed = 0) {
+  if (person.profile) return person.profile;
+  const detail = String(person.detail || "");
+  const tone = inferPersonalityTone(detail, person.name || "", seed);
+  const traits = extractAppearanceTraits(detail);
+  const fallback = fallbackAppearance(tone, seed);
+  return {
+    tone,
+    hair: traits.hair || fallback.hair,
+    skin: traits.skin || fallback.skin,
+    face: traits.face || fallback.face,
+    clothes: traits.clothes || fallback.clothes
+  };
+}
+
+function inferPersonalityTone(detail, name, seed = 0) {
+  const text = `${detail} ${name}`;
+  if (/开朗|话唠|健谈|热情|外向|爱聊天|爱做饭|邻居/.test(text)) return "talkative";
+  if (/烦躁|不耐|心直口快|抱怨|脾气急/.test(text)) return "irritable";
+  if (/温柔|体贴|柔和|照顾|善良|耐心/.test(text)) return "gentle";
+  if (/傲慢|高傲|嘴硬|毒舌|强势|冷淡/.test(text)) return "proud";
+  if (/胆小|怯懦|不安|紧张|怕生|慌张/.test(text)) return "nervous";
+  if (/克制|冷静|沉稳|理性|谨慎|敏锐|观察|守序|正直/.test(text)) return "careful";
+  return ["talkative", "gentle", "careful", "nervous", "proud"][Math.abs((name.length || 1) + seed) % 5];
+}
+
+function fallbackAppearance(tone, seed) {
+  const sets = {
+    talkative: [
+      { hair: "蓬松的短发有点乱", skin: "面色红润", face: "圆润的脸上带着笑", clothes: "柔软开衫的袖口卷到手腕" },
+      { hair: "棕色发尾翘着一点", skin: "脸颊透着暖色", face: "眼睛很亮", clothes: "围裙边缘还沾着一点水汽" }
+    ],
+    gentle: [
+      { hair: "柔顺的黑发贴在耳侧", skin: "肤色干净温和", face: "眉眼舒展", clothes: "浅色外套整理得很平整" },
+      { hair: "低束的发尾垂在肩后", skin: "脸色柔和", face: "目光很安静", clothes: "针织衣料看起来很软" }
+    ],
+    proud: [
+      { hair: "利落的深色短发", skin: "肤色偏冷", face: "鼻梁挺直，唇线清晰", clothes: "外套扣得一丝不乱" },
+      { hair: "整齐的长发束在身后", skin: "脸色冷白", face: "眉眼锋利", clothes: "衣领压得很正" }
+    ],
+    nervous: [
+      { hair: "额前碎发微微散着", skin: "脸色有点发白", face: "眼神躲闪又忍不住看人", clothes: "外套袖口被攥出细褶" },
+      { hair: "软塌的刘海遮住一点眉眼", skin: "脸颊泛着紧张的浅红", face: "嘴唇抿得很紧", clothes: "衣摆被手指捏住" }
+    ],
+    irritable: [
+      { hair: "短发被风吹得有些乱", skin: "脸色被冷光衬得发灰", face: "眉头拧着，嘴角压得很低", clothes: "日常外套的拉链拉到一半" },
+      { hair: "额发乱糟糟地贴在额前", skin: "面色不太好看", face: "眼神里带着明显的不耐", clothes: "衣角沾着一点灰" }
+    ],
+    careful: [
+      { hair: "短发收拾得很利落", skin: "脸色平稳", face: "眼神清醒克制", clothes: "深色外套没有多余装饰" },
+      { hair: "发丝整齐地别在耳后", skin: "肤色在光里显得偏冷", face: "眉心压着一点思索", clothes: "衣袖干净，动作幅度很小" }
+    ]
+  };
+  const list = sets[tone] || sets.careful;
+  return list[Math.abs(seed) % list.length];
+}
+
+function inferSceneEmotion(cue) {
+  if (/笑|高兴|邀请|吃|饭|汤|邻居|聊天|轻松|温暖/.test(cue)) return "warm";
+  if (/危险|门缝|响|血|黑|暗|锁|防盗|紧张|害怕|失败/.test(cue)) return "tense";
+  if (/看|观察|发现|线索|奇怪|新|第一次/.test(cue)) return "curious";
+  return "guarded";
+}
+
+function trimCue(cue) {
+  const clean = String(cue || "").replace(/\s+/g, " ").replace(/^主控推动了剧情：/, "").trim();
+  return clean.slice(0, 26) || "刚才的变化";
+}
+
+function sceneFocus(cue) {
+  const text = String(cue || "");
+  const parts = [];
+  if (/搬进|新公寓|新邻居|公寓/.test(text)) parts.push("新邻居刚搬进来");
+  if (/牛肉|炖|饭|汤|吃|厨房/.test(text)) parts.push("热乎的饭菜正好能当作搭话借口");
+  if (/门缝|钥匙|防盗门|锁/.test(text)) parts.push("门口和锁边的异常动静");
+  if (/走廊|楼道|路人|感应灯/.test(text)) parts.push("走廊里忽明忽暗的动静");
+  if (/雨|风|冷|夜|暗/.test(text)) parts.push("屋外阴冷的天气");
+  if (/观察|看|发现|线索/.test(text)) parts.push("你正在留意现场细节");
+  if (!parts.length) return trimCue(text);
+  return [...new Set(parts)].slice(0, 2).join("，");
+}
+
+function buildSceneCue(prompt, storyText, env) {
+  return [prompt, storyText, env?.place, env?.weather].filter(Boolean).join("，");
+}
+
+function getStoryPlainText(story) {
+  return (story?.blocks || []).map((block) => block.text || "").join(" ");
 }
 
 function clamp(value, min, max) {
@@ -2797,13 +3032,13 @@ function parseEditedAiText(text, fallbackEnv) {
   } : fallbackEnv;
 
   const body = lines.filter((line) => !line.startsWith("---") && !line.includes("时间：") && !line.startsWith("[删除]"));
-  const blocks = body.map((line) => {
+  const blocks = body.flatMap((line) => {
     const dialogue = line.match(/^\[对话方框 - (.+?)\]\s*"?(.+?)"?$/);
     if (dialogue) {
       const cleaned = cleanDialogueText(dialogue[2]);
-      return { type: "dialogue", speaker: dialogue[1], text: cleaned.line };
+      return [{ type: "dialogue", speaker: dialogue[1], text: cleaned.line }];
     }
-    return { type: "paragraph", text: line };
+    return splitParagraphAndDialogue(line, "", 0);
   });
   return { env, blocks };
 }
@@ -3000,6 +3235,7 @@ function bindEvents() {
 
   els.mergeMemoryButton.addEventListener("click", mergeSelectedMemories);
   els.addNpcButton.addEventListener("click", () => {
+    syncAllSettingsFromInputs();
     state.settings.npcs.push({ id: uid("npc"), name: "", gender: "", age: "", detail: "" });
     renderHome();
     saveState();
@@ -3017,6 +3253,7 @@ function bindEvents() {
   els.npcList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-action='remove-npc']");
     if (!button) return;
+    syncAllSettingsFromInputs();
     state.settings.npcs = state.settings.npcs.filter((npc) => npc.id !== button.dataset.id);
     rebuildTimeline();
     renderAll();
