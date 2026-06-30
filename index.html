@@ -250,6 +250,31 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.typing-indicator {
+  color: var(--pink-deep);
+}
+
+.typing-indicator::after {
+  content: "...";
+  display: inline-block;
+  width: 1.8em;
+  text-align: left;
+  animation: typingPulse 1.2s ease-in-out infinite;
+}
+
+.error-text {
+  color: #c81f4a;
+  background: #fff4f6;
+  border: 1px dashed #ffb9cd;
+  border-radius: 14px;
+  padding: 10px 12px;
+}
+
+@keyframes typingPulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
 .dialogue-box {
   margin: 2px 0 18px;
   padding: 13px 15px;
@@ -1737,7 +1762,19 @@ function renderAiMessage(event) {
   const wrapper = document.createElement("article");
   wrapper.className = "message ai";
   wrapper.dataset.id = event.id;
-  const storyHtml = event.story.blocks
+  const isLoading = event.status === "loading";
+  const isError = event.status === "error";
+  const story = event.story || {
+    env: isError
+      ? { time: "生成失败", place: "API 连接", weather: "错误" }
+      : { time: "生成中", place: "剧情引擎", weather: "等待" },
+    blocks: []
+  };
+  const storyHtml = isLoading
+    ? `<p class="typing-indicator">正在输入中……</p>`
+    : isError
+      ? `<p class="error-text">${escapeHtml(event.errorMessage || "生成失败，请检查 API 设置。")}</p>`
+      : story.blocks
     .map((block) => {
       if (block.type === "dialogue") {
         return `
@@ -1754,15 +1791,15 @@ function renderAiMessage(event) {
   wrapper.innerHTML = `
     <div class="ai-card">
       <div class="env-strip">
-        <span>时间：${escapeHtml(event.story.env.time)}</span>
-        <span>地点：${escapeHtml(event.story.env.place)}</span>
-        <span>天气：${escapeHtml(event.story.env.weather)}</span>
+        <span>时间：${escapeHtml(story.env.time)}</span>
+        <span>地点：${escapeHtml(story.env.place)}</span>
+        <span>天气：${escapeHtml(story.env.weather)}</span>
       </div>
       <div class="story-body">${storyHtml}</div>
       <div class="button-row">
         <button class="message-action" data-action="delete-ai" data-id="${event.id}" type="button">删除</button>
-        <button class="message-action" data-action="reroll-ai" data-id="${event.id}" type="button">重说</button>
-        <button class="message-action" data-action="edit-ai" data-id="${event.id}" type="button">修改</button>
+        ${isLoading ? "" : `<button class="message-action" data-action="reroll-ai" data-id="${event.id}" type="button">重说</button>`}
+        ${isLoading || isError ? "" : `<button class="message-action" data-action="edit-ai" data-id="${event.id}" type="button">修改</button>`}
       </div>
     </div>
   `;
@@ -1989,45 +2026,88 @@ async function submitPlayerText(text) {
   state.events.push(playerEvent);
   rebuildTimeline();
   renderAll();
-  const aiEvent = await createAiEvent({ source: "player", text: trimmed, afterEventId: playerEvent.id });
-  state.events.push(aiEvent);
-  rebuildTimeline();
-  renderAll();
+  window.setTimeout(() => {
+    const aiEvent = createPendingAiEvent({ source: "player", text: trimmed });
+    state.events.push(aiEvent);
+    rebuildTimeline();
+    renderAll();
+    scheduleAiResolution(aiEvent.id);
+  }, 80);
 }
 
 async function submitDirective(text) {
   const trimmed = text.trim();
   if (!trimmed) return;
-  renderAll();
-  const aiEvent = await createAiEvent({ source: "directive", text: trimmed });
+  const aiEvent = createPendingAiEvent({ source: "directive", text: trimmed });
   state.events.push(aiEvent);
   rebuildTimeline();
   renderAll();
+  scheduleAiResolution(aiEvent.id);
 }
 
-async function createAiEvent({ source, text, variant = 0 }) {
-  const previous = latestSnapshot();
-  const story = await generateStory({ source, text, previous, variant });
+function scheduleAiResolution(id) {
+  window.setTimeout(() => {
+    resolveAiEvent(id);
+  }, 120);
+}
+
+function createPendingAiEvent({ source, text, variant = 0 }) {
   return {
     id: uid("ai"),
     type: "ai",
     source,
     prompt: text,
     variant,
-    story,
+    status: "loading",
+    story: {
+      env: { time: "生成中", place: "剧情引擎", weather: "等待" },
+      blocks: [{ type: "paragraph", text: "正在输入中……" }]
+    },
     createdAt: Date.now()
   };
 }
 
-async function generateStory({ source, text, previous, variant }) {
-  if (state.settings.apiUrl && state.settings.apiKey && state.settings.apiModel) {
-    try {
-      return await generateWithApi({ source, text, previous, variant });
-    } catch (error) {
-      console.warn("API generation failed, using local generator.", error);
-    }
+async function resolveAiEvent(id) {
+  const index = state.events.findIndex((event) => event.id === id);
+  const event = state.events[index];
+  if (!event || event.type !== "ai") return;
+  const previous = index > 0 ? state.snapshots[index - 1] || buildInitialSnapshot() : buildInitialSnapshot();
+  const loadingStartedAt = Date.now();
+  try {
+    const story = await generateStory({
+      source: event.source,
+      text: event.prompt || "",
+      previous,
+      variant: event.variant || 0
+    });
+    await keepTypingVisible(loadingStartedAt);
+    event.story = story;
+    event.status = "done";
+    delete event.errorMessage;
+  } catch (error) {
+    await keepTypingVisible(loadingStartedAt);
+    event.status = "error";
+    event.errorMessage = formatGenerationError(error);
+    event.story = {
+      env: { time: "生成失败", place: "API 连接", weather: "错误" },
+      blocks: [{ type: "paragraph", text: event.errorMessage }]
+    };
   }
-  return generateLocalStory({ source, text, previous, variant });
+  rebuildTimeline();
+  renderAll();
+}
+
+function keepTypingVisible(startedAt, minimum = 850) {
+  const elapsed = Date.now() - startedAt;
+  const rest = Math.max(0, minimum - elapsed);
+  return new Promise((resolve) => window.setTimeout(resolve, rest));
+}
+
+async function generateStory({ source, text, previous, variant }) {
+  if (!state.settings.apiUrl || !state.settings.apiKey || !state.settings.apiModel) {
+    throw new Error("请先在主页设置里填写 API URL、密钥和模型，并保存后再生成剧情。");
+  }
+  return await generateWithApi({ source, text, previous, variant });
 }
 
 async function generateWithApi({ source, text, previous, variant }) {
@@ -2062,7 +2142,7 @@ async function generateWithApi({ source, text, previous, variant }) {
       ],
       temperature: variant ? 0.95 : 0.75
     })
-  }, 12000);
+  }, getApiTimeout());
 
   if (!response.ok) throw new Error(`API HTTP ${response.status}`);
   const data = await response.json();
@@ -2079,6 +2159,23 @@ async function fetchWithTimeout(url, options = {}, timeout = 12000) {
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+function formatGenerationError(error) {
+  if (error?.name === "AbortError") {
+    return "生成失败：API 请求超时。请检查网络、接口地址，或模型响应速度。";
+  }
+  const message = String(error?.message || error || "未知错误");
+  if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
+    return "生成失败：浏览器无法连接 API。常见原因是接口跨域限制、网络不可达或 API 地址填写错误。";
+  }
+  return `生成失败：${message}`;
+}
+
+function getApiTimeout() {
+  const debugTimeout = new URLSearchParams(window.location.search).get("apiTimeout");
+  const parsed = Number(debugTimeout);
+  return Number.isFinite(parsed) && parsed >= 500 ? parsed : 12000;
 }
 
 function getModelsUrl(apiUrl) {
@@ -2109,7 +2206,7 @@ async function fetchAvailableModels() {
   try {
     const response = await fetchWithTimeout(getModelsUrl(state.settings.apiUrl), {
       headers: { Authorization: `Bearer ${state.settings.apiKey}` }
-    }, 10000);
+    }, getApiTimeout());
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     const models = (Array.isArray(data.data) ? data.data : [])
@@ -2150,7 +2247,7 @@ async function testApiConnection() {
         max_tokens: 8,
         temperature: 0
       })
-    }, 10000);
+    }, getApiTimeout());
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     await response.json();
     saveState();
@@ -2160,39 +2257,6 @@ async function testApiConnection() {
   }
 }
 
-function generateLocalStory({ source, text, previous, variant }) {
-  const env = nextEnvironment(previous.env, text, variant);
-  const npc = chooseNpc(text, variant);
-  const mood = pick(["谨慎", "迟疑", "冷静", "紧绷", "温和"], text.length + variant);
-  const memoryHint = previous.memories.long.at(-1)?.text || previous.memories.instant.at(-1)?.text || "此前的经历还很少，一切判断都在形成。";
-  const directiveLead = source === "directive" ? "新的剧情指令像一枚投入水面的石子，让原本安静的场景生出层层波纹。" : "新的行动信息进入场景后，周围的细节变得更加清晰，仿佛场景终于找到了继续前进的方向。";
-  const detail = state.settings.world ? "世界设定中的规则在暗处稳定地发挥作用，没有被任何突兀的解释打断。" : "空气里保留着尚未命名的规则感，许多事情还没有露出真正的边界。";
-
-  const blocks = [
-    {
-      type: "paragraph",
-      text: `${directiveLead}${detail}${env.place}里的光影轻轻移动，远处传来的声音没有替你做出任何决定，只把新的线索推到你能够看见的位置。`
-    },
-    {
-      type: "dialogue",
-      speaker: npc.name,
-      text: variant
-        ? `这一次，我会换个说法。${mood}一点看，刚才发生的事不像偶然，更像有人故意留下的提示。`
-        : `我听见了。${mood}一点看，刚才发生的事不像偶然，更像有人故意留下的提示。`
-    },
-    {
-      type: "paragraph",
-      text: `${npc.name}的目光短暂扫过现场，避开了替你下判断的越界部分，只指出那些正在变化的事实。${memoryHint}这份记忆让 NPC 的态度没有突然断裂，也让接下来的反应多了一层连续性。`
-    },
-    {
-      type: "paragraph",
-      text: `一处不起眼的痕迹被${npc.name}发现：${makeClue(text, variant)}。它没有强迫你采取任何行动，却足以让局面从静止转向等待。`
-    }
-  ];
-
-  return normalizeStory({ env, blocks }, previous, text, variant);
-}
-
 function normalizeStory(story, previous, text, variant) {
   const safeEnv = {
     time: story?.env?.time || previous.env.time || "傍晚",
@@ -2200,27 +2264,63 @@ function normalizeStory(story, previous, text, variant) {
     weather: story?.env?.weather || previous.env.weather || "微风"
   };
   const blocks = Array.isArray(story?.blocks) ? story.blocks : [];
-  const normalizedBlocks = blocks
-    .map((block) => {
-      if (block.type === "dialogue") {
-        return {
+  const normalizedBlocks = [];
+  blocks.forEach((block) => {
+    if (block.type === "dialogue") {
+      const cleaned = cleanDialogueText(block.text || "");
+      if (cleaned.aside) {
+        normalizedBlocks.push({
+          type: "paragraph",
+          text: sanitizeNoPlayerControl(cleaned.aside)
+        });
+      }
+      if (cleaned.line) {
+        normalizedBlocks.push({
           type: "dialogue",
           speaker: String(block.speaker || chooseNpc(text, variant).name),
-          text: sanitizeNoPlayerControl(block.text || "")
-        };
+          text: sanitizeNoPlayerControl(cleaned.line)
+        });
       }
-      return {
-        type: "paragraph",
-        text: sanitizeNoPlayerControl(block.text || "")
-      };
-    })
-    .filter((block) => block.text.trim());
+      return;
+    }
+    normalizedBlocks.push({
+      type: "paragraph",
+      text: sanitizeNoPlayerControl(block.text || "")
+    });
+  });
+  const filteredBlocks = normalizedBlocks.filter((block) => block.text.trim());
 
-  if (!normalizedBlocks.length) {
-    return generateLocalStory({ source: "player", text, previous, variant: variant + 3 });
+  if (!filteredBlocks.length) {
+    throw new Error("API 返回内容为空或格式不符合要求，请调整模型输出格式。");
   }
 
-  return { env: safeEnv, blocks: normalizedBlocks };
+  return { env: safeEnv, blocks: filteredBlocks };
+}
+
+function cleanDialogueText(text) {
+  let raw = String(text || "").replace(/\s*\n+\s*/g, " ").trim();
+  const quoted = raw.match(/[“"「『](.+?)[”"」』]/);
+  if (quoted) {
+    const line = quoted[1].trim();
+    const aside = raw.replace(quoted[0], "").replace(/[（）()]/g, "").trim();
+    return { line, aside };
+  }
+  const parts = raw
+    .split(/(?<=[。！？!?])\s*/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const actionPattern = /(低头|抬头|皱眉|微笑|转身|走|伸手|握住|看向|望向|沉默|心想|想起|意识到|觉得|感觉|叹了口气|垂下|攥紧|靠近|退后|站起|坐下)/;
+  const speechVerbs = /(说|说道|开口|低声|轻声|回答|问|提醒|喊|喃喃|冷声)/;
+  const dialogueParts = parts.filter((part) => !actionPattern.test(part) || speechVerbs.test(part));
+  const asideParts = parts.filter((part) => actionPattern.test(part) && !speechVerbs.test(part));
+  const line = (dialogueParts[0] || raw)
+    .replace(/^(.*?(?:说|说道|开口|低声|轻声|回答|问|提醒|喊|喃喃|冷声)[：:])/, "")
+    .replace(/[“”"「」『』]/g, "")
+    .trim();
+  return {
+    line,
+    aside: asideParts.join("")
+  };
 }
 
 function sanitizeNoPlayerControl(text) {
@@ -2243,18 +2343,6 @@ function sanitizeNoPlayerControl(text) {
   return result.trim();
 }
 
-function nextEnvironment(current, text, variant) {
-  const times = ["清晨", "上午", "午后", "黄昏", "深夜"];
-  const weathers = ["细雨", "薄雾", "晴光", "阴云", "微风", "雪意"];
-  const places = ["旧城区边缘", "白色走廊", "临街茶馆", "废弃礼堂", "潮湿小巷", "玻璃温室"];
-  const n = text.length + variant * 7 + (current.time || "").length;
-  return {
-    time: times[n % times.length],
-    place: current.place && variant === 0 ? current.place : places[n % places.length],
-    weather: weathers[(n + 2) % weathers.length]
-  };
-}
-
 function chooseNpc(text, variant) {
   const savedNpcs = state.settings.npcs.filter((npc) => (npc.name || npc.detail || "").trim());
   const ambientNpcs = [
@@ -2270,17 +2358,6 @@ function chooseNpc(text, variant) {
     age: npc.age || "未知",
     detail: npc.detail || "轮廓在光线里并不清晰，但注意力始终停在当前事件上。"
   };
-}
-
-function makeClue(text, variant) {
-  const clues = [
-    "一枚沾着粉色蜡痕的纸签压在桌角",
-    "窗缝里夹着半片被雨水泡软的旧车票",
-    "墙面新近擦拭过，仍残留一圈淡淡的灰印",
-    "门把手温度异常，像刚被人长久握住",
-    "地面有两组脚印，其中一组在关键位置突然消失"
-  ];
-  return clues[(text.length + variant) % clues.length];
 }
 
 function pick(list, seed) {
@@ -2314,8 +2391,8 @@ function applyPlayerEvent(snapshot, event) {
   next.statuses = (next.statuses || []).map((person, index) => ({
     ...person,
     posture: describeResponsivePosture(person.name, event.text, next.env, index),
-    thought: buildThought(person.name, event.text, next.memories, next.seed + index),
-    impression: buildImpression(event.text, next.seed + index)
+    thought: buildThought(person, event.text, next.memories, next.seed + index),
+    impression: buildImpression(person, event.text, next.seed + index)
   }));
   compactMemories(next);
   return next;
@@ -2330,11 +2407,12 @@ function applyAiEvent(snapshot, event) {
   const status = {
     id: npc.id,
     name: npc.name,
+    detail: npc.detail || existing?.detail || "",
     age: npc.age || existing?.age || "未知",
     appearance: buildDynamicAppearance(npc, event.story.env, event.prompt || "", event.variant || 0),
     posture: describePosture(event.story.env, event.variant),
-    thought: buildThought(npc.name, event.prompt || "", next.memories, event.variant),
-    impression: buildImpression(event.prompt || "", event.variant)
+    thought: buildThought(npc, event.prompt || "", next.memories, event.variant),
+    impression: buildImpression(npc, event.prompt || "", event.variant)
   };
   if (existing) Object.assign(existing, status);
   else next.statuses.push(status);
@@ -2438,27 +2516,44 @@ function extractAppearanceTraits(detail) {
   };
 }
 
-function buildThought(name, prompt, memories, variant) {
+function buildThought(person, prompt, memories, variant) {
+  const name = typeof person === "string" ? person : person.name;
+  const detail = typeof person === "string" ? "" : person.detail || "";
+  const personality = extractPersonalityTone(detail);
   const recent = memories.instant.at(-1)?.text || memories.long.at(-1)?.text || "还没有足够多的共同经历";
   const focus = prompt.replace(/\s+/g, "").slice(0, 18) || "新的变化";
   const tones = [
-    "此人不敢轻易下结论，只能继续观察你接下来会把注意力放在哪里。",
-    "此人开始重新评估你与现场异常之间的关系，同时压住过早表态的冲动。",
-    "此人意识到局势正在偏离原本预想，于是把更多判断暂时藏在沉默里。",
-    "此人对你的目的多了一层推测，却仍然克制着，不把这种判断直接说出口。"
+    `我不能轻易下结论，只能继续观察你接下来会把注意力放在哪里；${personality}让我更倾向先看事实。`,
+    `我需要重新评估你与现场异常之间的关系，但不能把判断说得太满；${personality}会让我保留余地。`,
+    `我察觉局势正在偏离原本预想，所以必须把更多判断暂时压住；${personality}提醒我不要贸然越界。`,
+    `我对你的目的多了一层推测，却还不适合直接表态；${personality}会影响我下一次开口的分寸。`
   ];
-  return `${name}正在把眼前的线索和“${focus}”联系起来。${recent} ${tones[(focus.length + variant) % tones.length]}这种想法会影响下一次开口、站位和是否愿意透露更多信息。`;
+  return `我正在把眼前的线索和“${focus}”联系起来。${recent} ${tones[(focus.length + variant) % tones.length]}这种想法会影响我下一次开口、站位和是否愿意透露更多信息。`;
 }
 
-function buildImpression(prompt, variant) {
+function buildImpression(person, prompt, variant) {
+  const detail = typeof person === "string" ? "" : person.detail || "";
+  const personality = extractPersonalityTone(detail);
   const impressions = [
-    "对你保持谨慎好奇，认为你值得继续观察。",
-    "对你略有戒备，但并未关闭交流的可能。",
-    "觉得你让局势变得复杂，因此更关注你的下一步选择。",
-    "对你的目的产生新的兴趣，同时仍在保留判断。",
-    "认为你没有轻易打破边界，因此愿意暂时维持合作距离。"
+    `我对你保持谨慎好奇，觉得你值得继续观察，但我会按${personality}来控制距离。`,
+    `我对你略有戒备，但还没有关闭交流可能，尤其会留意你是否尊重边界。`,
+    `我觉得你让局势变得复杂，因此更关注你的下一步选择，而不是立刻信任或否定你。`,
+    `我对你的目的产生新的兴趣，同时仍在保留判断，不会突然做出夸张反应。`,
+    `我认为你没有轻易打破边界，所以愿意暂时维持合作距离。`
   ];
   return impressions[(prompt.length + variant) % impressions.length];
+}
+
+function extractPersonalityTone(detail) {
+  const text = String(detail || "");
+  const traits = [];
+  if (/克制|冷静|沉稳|理性|谨慎/.test(text)) traits.push("克制谨慎的性格");
+  if (/敏锐|聪明|洞察|观察/.test(text)) traits.push("敏锐的观察习惯");
+  if (/温柔|体贴|柔和/.test(text)) traits.push("温和的处事方式");
+  if (/傲慢|高傲|嘴硬|毒舌/.test(text)) traits.push("不愿轻易示弱的习惯");
+  if (/胆小|怯懦|不安|紧张/.test(text)) traits.push("容易不安的本能");
+  if (/忠诚|守序|正直/.test(text)) traits.push("重视原则的底线");
+  return traits[0] || "既有设定中的性格底色";
 }
 
 function clamp(value, min, max) {
@@ -2491,19 +2586,23 @@ async function rerollAi(id) {
   const baseEvents = state.events.slice(0, index);
   const previousPlayer = [...baseEvents].reverse().find((item) => item.type === "player");
   const prompt = previousPlayer?.text || event.prompt || "";
-  const previousSnapshot = index > 0 ? state.snapshots[index - 1] || buildInitialSnapshot() : buildInitialSnapshot();
   const replacement = {
     ...event,
     id: uid("ai"),
     prompt,
     source: event.source,
     variant: (event.variant || 0) + 1,
-    story: await generateStory({ source: event.source, text: prompt, previous: previousSnapshot, variant: (event.variant || 0) + 1 }),
+    status: "loading",
+    story: {
+      env: { time: "生成中", place: "剧情引擎", weather: "等待" },
+      blocks: [{ type: "paragraph", text: "正在输入中……" }]
+    },
     createdAt: Date.now()
   };
   state.events = [...baseEvents, replacement];
   rebuildTimeline();
   renderAll();
+  scheduleAiResolution(replacement.id);
 }
 
 async function savePlayerEdit(id, text) {
@@ -2511,10 +2610,11 @@ async function savePlayerEdit(id, text) {
   if (index < 0) return;
   state.events[index].text = text.trim();
   state.events = state.events.slice(0, index + 1);
-  const aiEvent = await createAiEvent({ source: "player", text: state.events[index].text, afterEventId: id });
+  const aiEvent = createPendingAiEvent({ source: "player", text: state.events[index].text });
   state.events.push(aiEvent);
   rebuildTimeline();
   renderAll();
+  scheduleAiResolution(aiEvent.id);
 }
 
 async function saveAiEdit(id, text) {
@@ -2539,7 +2639,10 @@ function parseEditedAiText(text, fallbackEnv) {
   const body = lines.filter((line) => !line.startsWith("---") && !line.includes("时间：") && !line.startsWith("[删除]"));
   const blocks = body.map((line) => {
     const dialogue = line.match(/^\[对话方框 - (.+?)\]\s*"?(.+?)"?$/);
-    if (dialogue) return { type: "dialogue", speaker: dialogue[1], text: dialogue[2] };
+    if (dialogue) {
+      const cleaned = cleanDialogueText(dialogue[2]);
+      return { type: "dialogue", speaker: dialogue[1], text: cleaned.line };
+    }
     return { type: "paragraph", text: line };
   });
   return { env, blocks };
