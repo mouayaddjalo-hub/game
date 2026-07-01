@@ -1833,79 +1833,50 @@ function renderSidebar() {
   els.relationModeButton.classList.toggle("active", mode === "relation");
   els.statusList.classList.toggle("hidden", mode !== "status");
   els.relationList.classList.toggle("hidden", mode !== "relation");
-  const rounds = getTimelineRounds();
+  const current = getCurrentSidebarSnapshot();
 
   els.statusList.innerHTML = "";
-  if (!rounds.some((round) => round.statuses.length)) {
+  if (!current.statuses.length) {
     els.statusList.innerHTML = `<div class="character-card">暂无在场人物。添加主要 NPC 或开始剧情后会自动刷新。</div>`;
   } else {
-    rounds.forEach((round) => {
-      if (!round.statuses.length) return;
-      const group = document.createElement("section");
-      group.className = "round-group";
-      group.innerHTML = `<h3>${escapeHtml(round.label)}</h3>`;
-      round.statuses.forEach((person) => {
-        const card = document.createElement("article");
-        card.className = "character-card";
-        card.innerHTML = `
-          <div>姓名：${escapeHtml(person.name)}</div>
-          <div>年龄：${escapeHtml(person.age)}</div>
-          <div>外形：${escapeHtml(person.appearance || "外形细节仍在当前光线里逐步清晰。")}</div>
-          <div>体位（姿势）：${escapeHtml(person.posture || "停在便于观察局势的位置。")}</div>
-          <div>内心想法：${escapeHtml(ensureLongThought(person.thought, person.name))}</div>
-          <div>对“你”印象：${escapeHtml(person.impression || "仍在观察你的意图与边界。")}</div>
-        `;
-        group.appendChild(card);
-      });
-      els.statusList.appendChild(group);
+    current.statuses.forEach((person) => {
+      const card = document.createElement("article");
+      card.className = "character-card";
+      card.innerHTML = `
+        <div>姓名：${escapeHtml(person.name)}</div>
+        <div>年龄：${escapeHtml(person.age)}</div>
+        <div>外形：${escapeHtml(person.appearance || "外形细节仍在当前光线里逐步清晰。")}</div>
+        <div>体位（姿势）：${escapeHtml(person.posture || "停在便于观察局势的位置。")}</div>
+        <div>内心想法：${escapeHtml(ensureLongThought(person.thought, person.name))}</div>
+        <div>对“你”印象：${escapeHtml(person.impression || "仍在观察你的意图与边界。")}</div>
+      `;
+      els.statusList.appendChild(card);
     });
   }
 
   els.relationList.innerHTML = "";
-  if (!rounds.some((round) => round.relations.length)) {
+  if (!current.relations.length) {
     els.relationList.innerHTML = `<div class="relation-card">暂无已解锁关系。</div>`;
   } else {
-    rounds.forEach((round) => {
-      if (!round.relations.length) return;
-      const group = document.createElement("section");
-      group.className = "round-group";
-      group.innerHTML = `<h3>${escapeHtml(round.label)}</h3>`;
-      round.relations.forEach((rel) => {
-        const card = document.createElement("article");
-        card.className = "relation-card";
-        card.innerHTML = `
-          <div>人物：${escapeHtml(rel.name)}</div>
-          <div>关系：${escapeHtml(rel.description)}</div>
-          <div>好感度：${escapeHtml(rel.affection)}</div>
-        `;
-        group.appendChild(card);
-      });
-      els.relationList.appendChild(group);
+    current.relations.forEach((rel) => {
+      const card = document.createElement("article");
+      card.className = "relation-card";
+      card.innerHTML = `
+        <div>人物：${escapeHtml(rel.name)}</div>
+        <div>关系：${escapeHtml(rel.description)}</div>
+        <div>好感度：${escapeHtml(rel.affection)}</div>
+      `;
+      els.relationList.appendChild(card);
     });
   }
 }
 
-function getTimelineRounds() {
-  if (!state.snapshots.length) {
-    const initial = latestSnapshot();
-    return [{ label: "当前", statuses: initial.statuses || [], relations: initial.relations || [] }];
-  }
-  const rounds = [];
-  state.snapshots.forEach((snapshot, index) => {
-    const event = state.events[index];
-    if (!event || (event.type !== "player" && event.type !== "ai" && event.type !== "memoryMerge")) return;
-    const label = event.type === "player"
-      ? `第 ${rounds.length + 1} 回合：玩家行动`
-      : event.type === "ai"
-        ? `第 ${rounds.length + 1} 回合：剧情推进`
-        : `第 ${rounds.length + 1} 回合：记忆整合`;
-    rounds.push({
-      label,
-      statuses: clone(snapshot.statuses || []),
-      relations: clone(snapshot.relations || [])
-    });
-  });
-  return rounds.length ? rounds : [{ label: "当前", statuses: [], relations: [] }];
+function getCurrentSidebarSnapshot() {
+  const snapshot = latestSnapshot();
+  return {
+    statuses: clone(snapshot.statuses || []),
+    relations: clone(snapshot.relations || [])
+  };
 }
 
 function renderHome() {
@@ -2106,13 +2077,25 @@ async function resolveAiEvent(id) {
   const previous = index > 0 ? state.snapshots[index - 1] || buildInitialSnapshot() : buildInitialSnapshot();
   const loadingStartedAt = Date.now();
   try {
-    const story = await generateStory({
+    let story = await generateStory({
       source: event.source,
       text: event.prompt || "",
       previous,
       variant: event.variant || 0,
       eventId: id
     });
+    if (event.avoidText && isTooSimilarStory(storyToPlainText(story), event.avoidText)) {
+      story = await generateStory({
+        source: event.source,
+        text: event.prompt || "",
+        previous,
+        variant: (event.variant || 0) + 101,
+        eventId: id
+      });
+      if (isTooSimilarStory(storyToPlainText(story), event.avoidText)) {
+        throw new Error("重说失败：模型返回内容与上一版过于相似，请再次点击重说或提高模型随机性。");
+      }
+    }
     await keepTypingVisible(loadingStartedAt);
     event.story = story;
     event.status = "done";
@@ -2142,10 +2125,11 @@ async function generateStory({ source, text, previous, variant, eventId }) {
   if (!state.settings.apiUrl || !state.settings.apiKey || !state.settings.apiModel) {
     throw new Error("请先在主页设置里填写 API URL、密钥和模型，并保存后再生成剧情。");
   }
-  return await generateWithApi({ source, text, previous, variant, eventId });
+  const event = state.events.find((item) => item.id === eventId);
+  return await generateWithApi({ source, text, previous, variant, eventId, avoidText: event?.avoidText || "" });
 }
 
-async function generateWithApi({ source, text, previous, variant, eventId }) {
+async function generateWithApi({ source, text, previous, variant, eventId, avoidText = "" }) {
   const systemPrompt = [
     "你是 MUYU 风格 AI 文字冒险引擎。",
     "绝对禁止代替玩家角色说话、做动作或做决定；只能描写环境、推动剧情、扮演 NPC。",
@@ -2157,6 +2141,8 @@ async function generateWithApi({ source, text, previous, variant, eventId }) {
     "NPC 必须像真实人物一样拥有稳定性格、欲望和顾虑；剧情发展要受到在场人物状态影响，例如开朗爱做饭的邻居会自然想到聊天、送食物或邀请吃饭，而不是只围绕抽象线索判断。",
     "禁止在正文或人物状态里暴露生成逻辑、设定提炼、系统规则、模型限制等 AI 感文字。",
     "如果出现人物说话，必须单独使用 dialogue 块；paragraph 里不得混入引号台词，也不得把台词和旁白挤在同一段。",
+    "禁止在 paragraph 正文里写“时间：地点：天气：”这种信息条内容；环境信息只能放在 env 字段。",
+    "重说时必须生成明显不同的新版本：更换至少两个环境细节、一个 NPC 动作、主要台词措辞和剧情推进方向；不能只替换同义词，不能与上一版大差不差。",
     `世界设定：${state.settings.world || "未填写"}`,
     `主控设定：${formatPlayerProfileForPrompt()}`,
     `主要 NPC：${JSON.stringify(state.settings.npcs)}`,
@@ -2164,7 +2150,8 @@ async function generateWithApi({ source, text, previous, variant, eventId }) {
     `当前环境：${JSON.stringify(previous.env)}`,
     `当前记忆：${JSON.stringify(previous.memories)}`,
     `生成模式：${source === "directive" ? "剧情发展指令扩写，不写玩家反应" : "回应玩家输入，不越权操控玩家"}`,
-    `重说差异种子：${variant}`
+    `重说差异种子：${variant}`,
+    avoidText ? `上一版剧情摘要，重说时必须避开这些内容和措辞：${avoidText.slice(0, 900)}` : ""
   ].join("\n");
 
   const response = await fetchWithTimeout(state.settings.apiUrl, {
@@ -2180,6 +2167,8 @@ async function generateWithApi({ source, text, previous, variant, eventId }) {
         { role: "user", content: text }
       ],
       temperature: variant ? 0.95 : 0.75,
+      presence_penalty: variant ? 0.8 : 0.2,
+      frequency_penalty: variant ? 0.7 : 0.1,
       stream: true
     })
   }, getApiTimeout());
@@ -2277,6 +2266,40 @@ function storyToPlainText(story) {
     else if (block.text) parts.push(block.text);
   });
   return parts.filter(Boolean).join("\n\n");
+}
+
+function collectDialogueBySpeaker(story) {
+  const map = {};
+  (story?.blocks || []).forEach((block) => {
+    if (block.type !== "dialogue" || !block.speaker || !block.text) return;
+    map[block.speaker] = [map[block.speaker], block.text].filter(Boolean).join(" ");
+  });
+  return map;
+}
+
+function isTooSimilarStory(nextText, previousText) {
+  const a = normalizeCompareText(nextText);
+  const b = normalizeCompareText(previousText);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const short = a.length < b.length ? a : b;
+  const long = a.length < b.length ? b : a;
+  if (short.length > 80 && long.includes(short.slice(0, Math.min(short.length, 220)))) return true;
+  const grams = new Set();
+  for (let i = 0; i < short.length - 5; i += 3) grams.add(short.slice(i, i + 6));
+  if (!grams.size) return false;
+  let same = 0;
+  grams.forEach((gram) => {
+    if (long.includes(gram)) same += 1;
+  });
+  return same / grams.size > 0.72;
+}
+
+function normalizeCompareText(text) {
+  return String(text || "")
+    .replace(/[，。！？；：、“”"「」『』\s]/g, "")
+    .replace(/时间.*?天气/g, "")
+    .trim();
 }
 
 function unescapeJsonString(value) {
@@ -2432,15 +2455,22 @@ async function testApiConnection() {
 }
 
 function normalizeStory(story, previous, text, variant) {
+  const envFromText = extractEnvFromBlocks(story?.blocks || []);
   const safeEnv = {
-    time: story?.env?.time || previous.env.time || "傍晚",
-    place: story?.env?.place || previous.env.place || "未命名的地点",
-    weather: story?.env?.weather || previous.env.weather || "微风"
+    time: story?.env?.time || envFromText.time || previous.env.time || "傍晚",
+    place: story?.env?.place || envFromText.place || previous.env.place || "未命名的地点",
+    weather: story?.env?.weather || envFromText.weather || previous.env.weather || "微风"
   };
   const blocks = Array.isArray(story?.blocks) ? story.blocks : [];
   const normalizedBlocks = [];
   blocks.forEach((block) => {
     if (block.type === "dialogue") {
+      const rawDialogueText = String(block.text || "");
+      if (/[A-Za-z][A-Za-z .'-]{0,30}[：:]\s*[“"「『]|[\u4e00-\u9fa5A-Za-z0-9·]{1,16}[：:]\s*[“"「『]/.test(rawDialogueText)) {
+        const mixedDialogue = splitParagraphAndDialogue(rawDialogueText, text, variant);
+        mixedDialogue.forEach((item) => normalizedBlocks.push(item));
+        return;
+      }
       const cleaned = cleanDialogueText(block.text || "");
       if (cleaned.aside) {
         normalizedBlocks.push({
@@ -2471,9 +2501,9 @@ function normalizeStory(story, previous, text, variant) {
 }
 
 function splitParagraphAndDialogue(text, prompt, variant) {
-  const raw = String(text || "").replace(/\s*\n+\s*/g, " ").trim();
+  const raw = stripInlineEnv(String(text || "").replace(/\s*\n+\s*/g, " ").trim());
   if (!raw) return [];
-  const pattern = /([^。！？!?：“”"「」『』]{1,12})[：:]\s*[“"「『]([^”"」』]+)[”"」』]/g;
+  const pattern = /([A-Za-z][A-Za-z .'-]{0,30}|[\u4e00-\u9fa5A-Za-z0-9·]{1,16})[：:]\s*[“"「『]([^”"」』]+)[”"」』]/g;
   const blocks = [];
   let last = 0;
   let match;
@@ -2484,7 +2514,7 @@ function splitParagraphAndDialogue(text, prompt, variant) {
     }
     blocks.push({
       type: "dialogue",
-      speaker: match[1].replace(/.*?(楼下|窗外|门外|身后|旁边)?([^，。！？!?：:]{1,8})$/, "$2").trim() || chooseNpc(prompt, variant).name,
+      speaker: cleanSpeakerName(match[1]) || chooseNpc(prompt, variant).name,
       text: sanitizeNoPlayerControl(match[2].trim())
     });
     last = pattern.lastIndex;
@@ -2494,6 +2524,33 @@ function splitParagraphAndDialogue(text, prompt, variant) {
     blocks.push({ type: "paragraph", text: sanitizeNoPlayerControl(rest) });
   }
   return blocks.length ? blocks : [{ type: "paragraph", text: sanitizeNoPlayerControl(raw) }];
+}
+
+function cleanSpeakerName(name) {
+  const raw = String(name || "").replace(/[，。！？!?、\s]+$/g, "").trim();
+  if (!raw) return "";
+  if (/^[A-Za-z][A-Za-z .'-]{1,30}$/.test(raw)) return raw.trim();
+  return raw
+    .replace(/^.*?(楼下|窗外|门外|身后|旁边|隔壁|远处|走廊尽头)/, "")
+    .replace(/^(的|那个|那名|一位|一个)/, "")
+    .slice(-10)
+    .trim();
+}
+
+function extractEnvFromBlocks(blocks) {
+  const text = (blocks || []).map((block) => block?.text || "").join(" ");
+  return {
+    time: text.match(/时间[：:]\s*([^ 地点天气。！？!?，,]+)/)?.[1] || "",
+    place: text.match(/地点[：:]\s*([^ 天气。！？!?，,]+)/)?.[1] || "",
+    weather: text.match(/天气[：:]\s*([^ 。！？!?，,]+)/)?.[1] || ""
+  };
+}
+
+function stripInlineEnv(text) {
+  return String(text || "")
+    .replace(/^\s*时间[：:]\s*[^ 地点天气。！？!?，,]+\s*地点[：:]\s*[^ 天气。！？!?，,]+\s*天气[：:]\s*[^ 。！？!?，,]+\s*/g, "")
+    .replace(/^\s*时间[：:]\s*[^。！？!?]*?(?=[\u4e00-\u9fa5A-Za-z])/g, "")
+    .trim();
 }
 
 function cleanDialogueText(text) {
@@ -2640,6 +2697,7 @@ function applyAiEvent(snapshot, event) {
   next.env = event.story.env;
   const storyText = getStoryPlainText(event.story);
   const cue = buildSceneCue(event.prompt || "", storyText, next.env);
+  const speechByNpc = collectDialogueBySpeaker(event.story);
   const npcs = getPresentNpcs(event).map((npc, index) => {
     const existing = next.statuses.find((person) => person.id === npc.id || person.name === npc.name);
     return { ...npc, detail: npc.detail || existing?.detail || "", existing, offset: index };
@@ -2647,16 +2705,18 @@ function applyAiEvent(snapshot, event) {
 
   npcs.forEach((npc) => {
     const profile = parseCharacterProfile(npc, (event.variant || 0) + npc.offset);
+    const personalCue = [cue, speechByNpc[npc.name] || ""].filter(Boolean).join("，");
+    const statusSeed = (event.variant || 0) + npc.offset + next.seed;
     const status = {
       id: npc.id,
       name: npc.name,
       detail: npc.detail || npc.existing?.detail || "",
       age: npc.age || npc.existing?.age || "未知",
       profile,
-      appearance: buildDynamicAppearance({ ...npc, profile }, event.story.env, cue, (event.variant || 0) + npc.offset),
-      posture: describePosture(event.story.env, (event.variant || 0) + npc.offset, profile, cue),
-      thought: buildThought({ ...npc, profile }, cue, next.memories, (event.variant || 0) + npc.offset),
-      impression: buildImpression({ ...npc, profile }, cue, (event.variant || 0) + npc.offset)
+      appearance: buildDynamicAppearance({ ...npc, profile }, event.story.env, personalCue, statusSeed),
+      posture: describePosture(event.story.env, statusSeed, profile, personalCue),
+      thought: buildThought({ ...npc, profile }, personalCue, next.memories, statusSeed),
+      impression: buildImpression({ ...npc, profile }, personalCue, statusSeed)
     };
     if (npc.existing) Object.assign(npc.existing, status);
     else next.statuses.push(status);
@@ -2981,12 +3041,14 @@ async function rerollAi(id) {
   const baseEvents = state.events.slice(0, index);
   const previousPlayer = [...baseEvents].reverse().find((item) => item.type === "player");
   const prompt = previousPlayer?.text || event.prompt || "";
+  const avoidText = storyToPlainText(event.story || {});
   const replacement = {
     ...event,
     id: uid("ai"),
     prompt,
     source: event.source,
     variant: (event.variant || 0) + 1,
+    avoidText,
     status: "loading",
     story: {
       env: { time: "生成中", place: "剧情引擎", weather: "等待" },
@@ -2994,6 +3056,8 @@ async function rerollAi(id) {
     },
     createdAt: Date.now()
   };
+  delete replacement.streamText;
+  delete replacement.errorMessage;
   state.events = [...baseEvents, replacement];
   rebuildTimeline();
   renderAll();
